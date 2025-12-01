@@ -1,0 +1,16 @@
+# ROS2 / colcon
+build/
+install/
+log/
+.colcon/
+confi
+
+# Python
+__pycache__/
+*.pyc
+
+# Divers
+*.swp
+*.swo
+LICENSE
+
