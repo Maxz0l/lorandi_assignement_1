@@ -1,4 +1,37 @@
 #!/usr/bin/env python3
+"""
+go_to_tags.py — Navigation vers le midpoint entre deux AprilTags
+================================================================
+
+Concepts ROS2 utilisés
+----------------------
+  Node        : unité d'exécution indépendante dans le graphe ROS2.
+                Chaque nœud a un nom unique, peut publier/s'abonner.
+  Topic       : canal de communication nommé, typé, asynchrone.
+                Un publisher envoie ; N subscribers reçoivent.
+  Subscriber  : crée un abonnement à un topic. Le callback fourni est
+                appelé automatiquement à chaque message reçu.
+  Publisher   : permet d'envoyer un message sur un topic.
+  Timer       : callback périodique (ici 10 Hz) géré par le executor.
+  TF2         : bibliothèque ROS2 de transformations entre repères.
+                Permet de savoir «où est l'objet X dans le repère Y».
+  spin()      : démarre la boucle d'événements du nœud (bloquant).
+
+Architecture hybride délibérative / réactive (cours 18-BIS, 19)
+----------------------------------------------------------------
+  Délibératif : SENSE → PLAN → ACT  (lent, connaissance globale)
+                → calcul du but depuis les positions TF des AprilTags
+  Réactif     : SENSE → ACT          (rapide, capteurs locaux)
+                → évitement d'obstacles via le scan LiDAR
+
+Les deux couches sont combinées par priorité (subsumption, Brooks 1986) :
+
+  Prio 0 – Couloir    : centrage latéral entre deux murs
+  Prio 1 – Urgence    : recul si obstacle < 0.30 m
+  Prio 2 – Réactif    : LiDAR guide si obstacle < 0.55 m
+  Prio 3 – Délibératif: cap vers but + répulsion douce (Motor Schema)
+"""
+
 import math
 
 import rclpy
@@ -10,427 +43,445 @@ from apriltag_msgs.msg import AprilTagDetectionArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
+
+_G = '\033[92m'   # vert
+_Y = '\033[93m'   # jaune
+_C = '\033[96m'   # cyan
+_M = '\033[95m'   # magenta
+_B = '\033[1m'    # gras
+_R = '\033[0m'    # reset
 
 
 class GoToTags(Node):
+
     def __init__(self):
+        # super().__init__ enregistre le nœud dans le graphe ROS2 avec son nom
         super().__init__('go_to_tags')
-        
-        # TF Buffer et Listener
-        self.tf_buffer = Buffer()
+
+        # ── TF2 ───────────────────────────────────────────────────────────────
+        # Buffer : stocke l'historique des transformations reçues
+        # TransformListener : s'abonne à /tf et /tf_static pour alimenter le Buffer
+        self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        
-        # Subscriber pour les détections d'AprilTags
+
+        # ── Subscribers ───────────────────────────────────────────────────────
+        # Signature : create_subscription(type_msg, nom_topic, callback, qos_depth)
+        # qos_depth = taille de la file d'attente si les messages arrivent trop vite
         self.subscription = self.create_subscription(
-            AprilTagDetectionArray,
-            '/apriltag/detections',
-            self.detection_callback,
-            10
-        )
-        
-        # Subscriber pour l'odométrie
+            AprilTagDetectionArray, '/apriltag/detections', self.detection_callback, 10)
         self.odom_sub = self.create_subscription(
-            Odometry,
-            '/odom',
-            self.odom_callback,
-            10
-        )
-        
-        # Subscriber pour le LiDAR
+            Odometry, '/odom', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(
-            LaserScan,
-            '/scan',
-            self.scan_callback,
-            10
-        )
-        
-        # Publisher pour les commandes de vitesse
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        
-        # Timer pour la navigation
+            LaserScan, '/scan', self.scan_callback, 10)
+
+        # ── Publishers ────────────────────────────────────────────────────────
+        # Twist     : message standard pour les commandes de vitesse (linear + angular)
+        # Bool      : signal simple envoyé à table_detector pour activer la détection
+        self.cmd_vel_pub     = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.goal_reached_pub = self.create_publisher(Bool, '/goal_reached', 10)
+
+        # Timer créé dynamiquement une fois le but calculé (cf. calculate_and_navigate_to_middle)
         self.nav_timer = None
-        
-        # Variables de navigation
-        self.detected_tag_ids = set()
-        self.navigation_started = False
-        self.goal_x = None
+
+        # ── État de navigation ────────────────────────────────────────────────
+        self.detected_tag_ids   = set()   # IDs des tags vus (set = pas de doublon)
+        self.navigation_started = False   # bloque les nouvelles détections après démarrage
+        self.goal_x = None               # but en frame odom (None = pas encore défini)
         self.goal_y = None
-        self.current_x = 0.0
-        self.current_y = 0.0
-        self.current_yaw = 0.0
-        
-        # Variables LiDAR
-        self.min_front_distance = 999.0
-        self.min_left_distance = 999.0
-        self.min_right_distance = 999.0
-        
-        # Mode de navigation
-        self.mode = "GO_TO_GOAL"  # ou "WALL_FOLLOWING"
-        
-        # Paramètres généraux
-        self.obstacle_threshold = 0.75       # déclenchement du contournement
-        self.wall_follow_distance = 0.45     # distance cible au mur gauche
-        self.wall_follow_speed = 0.45        # vitesse en suivi de mur
-        self.normal_speed = 1.50             # vitesse max en ligne droite (rapide)
-        self.angular_speed = 1.8             # vitesse de rotation de base
-        self.distance_tolerance = 0.25
-        self.angle_tolerance = 0.15          # ~8.6°
-        
-        # Variables Bug2 (m-line)
-        self.start_x = None
-        self.start_y = None
-        self.m_dx = None
-        self.m_dy = None
-        self.m_norm = None
-        self.m_line_defined = False
-        self.m_line_epsilon = 0.10           # tolérance distance à la m-line
-        self.m_line_margin = 0.25            # gain de distance au but pour quitter le mur
-        
-        # Variables de contournement
-        self.contouring_obstacle = False
-        self.hit_distance_to_goal = None
-        
-        self.get_logger().info('GoToTags node initialized with Bug2-style navigation.')
-    
-    # ==================== CALLBACK LiDAR ====================
+        self.current_x   = 0.0
+        self.current_y   = 0.0
+        self.current_yaw = 0.0           # orientation du robot [rad]
+
+        # ── Distances LiDAR (5 fenêtres angulaires) ───────────────────────────
+        # Chaque valeur = distance minimale mesurée dans un cône de ±15–20°.
+        # Initialisées à 999 (= aucun obstacle détecté).
+        self.min_front_distance       = 999.0  # 0°
+        self.min_front_left_distance  = 999.0  # +30°
+        self.min_front_right_distance = 999.0  # -30°
+        self.min_left_distance        = 999.0  # +90°
+        self.min_right_distance       = 999.0  # -90°
+
+        self.in_corridor = False  # mémorise l'état couloir pour éviter les logs répétés
+
+        # ── Paramètres – couche délibérative ─────────────────────────────────
+        self.k_att       = 1.0  # gain P : erreur de cap [rad] → angular.z [rad/s]
+        self.max_linear  = 0.4  # vitesse linéaire max [m/s]
+        self.max_angular = 1.2  # vitesse angulaire max [rad/s]
+
+        # ── Paramètres – couche réactive ──────────────────────────────────────
+        self.d_emergency = 0.30  # seuil urgence [m] : recul immédiat
+        self.d_obstacle  = 0.55  # seuil réactif [m] : couche réactive prioritaire
+        self.k_front     = 0.8   # gain de rotation en mode réactif
+
+        # Répulsion douce (utilisée dans la couche délibérative)
+        self.d_diag = 0.70  # rayon d'influence des diagonales avant [m]
+        self.d_side = 0.55  # rayon d'influence des côtés [m]
+        self.k_diag = 0.6   # gain répulsion diagonale
+        self.k_side = 0.5   # gain répulsion latérale
+
+        # ── Paramètres – mode couloir (extra points) ─────────────────────────
+        self.corridor_threshold = 0.60  # [m] seuil de détection d'un mur latéral
+        self.corridor_speed     = 0.30  # [m/s] vitesse dans le couloir
+        self.k_corridor         = 1.0   # gain centrage latéral
+
+        # ── Tolérance d'arrivée ───────────────────────────────────────────────
+        self.distance_tolerance = 0.25  # [m]
+
+        print(f'{_B}╔══════════════════════════════════════════════════════════╗{_R}')
+        print(f'{_B}║  GoToTags — Navigation hybride délibérative / réactive   ║{_R}')
+        print(f'{_B}╠══════════════════════════════════════════════════════════╣{_R}')
+        print(f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray     {_B}║{_R}')
+        print(f'{_B}║{_R}  {_Y}SUB{_R}  /odom                  Odometry                   {_B}║{_R}')
+        print(f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                  {_B}║{_R}')
+        print(f'{_B}║{_R}  {_G}PUB{_R}  /cmd_vel               Twist                      {_B}║{_R}')
+        print(f'{_B}║{_R}  {_G}PUB{_R}  /goal_reached          Bool                       {_B}║{_R}')
+        print(f'{_B}║{_R}  {_C}TF2{_R}  odom ← tag36h11:<id>  (lookup dynamique)          {_B}║{_R}')
+        print(f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CALLBACKS CAPTEURS
+    # Les callbacks sont appelés par le executor de ROS2 de façon asynchrone,
+    # à chaque réception d'un message sur le topic correspondant.
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def scan_callback(self, msg: LaserScan):
-        """Analyse du LiDAR avec calcul d’angles réels (avant / gauche / droite)."""
+        """
+        Reçoit un scan LiDAR complet et extrait 5 distances minimales.
+
+        LaserScan contient :
+          ranges[]       : tableau de distances (une par rayon)
+          angle_min      : angle du premier rayon [rad]
+          angle_increment: pas angulaire entre deux rayons [rad]
+
+        On calcule des «fenêtres» angulaires pour être robuste au bruit :
+        window_min(θ, Δθ) = minimum des rayons dans le cône [θ-Δθ, θ+Δθ].
+        """
         ranges = msg.ranges
         n = len(ranges)
         if n == 0:
             return
-
         angle_min = msg.angle_min
         inc = msg.angle_increment
 
-        def window_min(center_angle_rad: float, width_angle_rad: float):
-            """Distance min dans une fenêtre angulaire autour d’un angle donné."""
-            center_idx = int((center_angle_rad - angle_min) / inc)
-            half_width_idx = max(1, int((width_angle_rad / 2.0) / inc))
-
-            start = max(0, center_idx - half_width_idx)
-            end = min(n, center_idx + half_width_idx)
-
+        def window_min(center_rad: float, half_width_rad: float) -> float:
+            # Convertit l'angle central en indice dans le tableau ranges[]
+            ci = int((center_rad - angle_min) / inc)
+            hw = max(1, int(half_width_rad / inc))
             valid = [
-                r for r in ranges[start:end]
-                if math.isfinite(r) and r > 0.05
+                r for r in ranges[max(0, ci - hw): min(n, ci + hw)]
+                if math.isfinite(r) and r > 0.05  # filtre inf et artefacts < 5 cm
             ]
             return min(valid) if valid else 999.0
 
-        # Avant = autour de 0°
-        self.min_front_distance = window_min(0.0, math.radians(20.0))
-        # Gauche = autour de +90°
-        self.min_left_distance = window_min(math.pi / 2.0, math.radians(20.0))
-        # Droite = autour de -90°
-        self.min_right_distance = window_min(-math.pi / 2.0, math.radians(20.0))
-
-    # ==================== CALLBACK ODOM ====================
+        self.min_front_distance       = window_min(0.0,               math.radians(20.0))
+        self.min_front_left_distance  = window_min( math.radians(30), math.radians(15.0))
+        self.min_front_right_distance = window_min(-math.radians(30), math.radians(15.0))
+        self.min_left_distance        = window_min( math.pi / 2,      math.radians(20.0))
+        self.min_right_distance       = window_min(-math.pi / 2,      math.radians(20.0))
 
     def odom_callback(self, msg: Odometry):
-        """Mise à jour de la position du robot."""
+        """
+        Met à jour la pose du robot depuis le topic /odom (odométrie des roues).
+
+        Odometry.pose.pose.orientation est un quaternion (x, y, z, w).
+        On en extrait l'angle de rotation autour de Z (yaw) avec la formule
+        standard : yaw = atan2(2(wz + xy), 1 - 2(y² + z²)).
+        """
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
-        
-        # Quaternion → yaw
         q = msg.pose.pose.orientation
-        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-        self.current_yaw = math.atan2(siny_cosp, cosy_cosp)
-
-    # ==================== CALLBACK TAGS ====================
+        self.current_yaw = math.atan2(
+            2 * (q.w * q.z + q.x * q.y),
+            1 - 2 * (q.y * q.y + q.z * q.z))
 
     def detection_callback(self, msg: AprilTagDetectionArray):
-        """Callback AprilTags."""
+        """
+        Reçoit les détections AprilTag et lance la navigation quand 2 tags sont vus.
+
+        AprilTagDetection.id est un int32 (pas un tableau).
+        On bloque ce callback après le démarrage de la navigation pour ne pas
+        recalculer le but en cours de route.
+        """
         if self.navigation_started:
             return
-        
-        current_ids = set()
-        for detection in msg.detections:
-            tag_id = detection.id
-            current_ids.add(tag_id)
-            self.get_logger().info(f'Tag {tag_id} detected!')
-        
-        self.detected_tag_ids.update(current_ids)
-        
+        for det in msg.detections:
+            tag_id = det.id
+            if tag_id not in self.detected_tag_ids:
+                self.detected_tag_ids.add(tag_id)
+                n_seen = len(self.detected_tag_ids)
+                self.get_logger().info(
+                    f'{_Y}[TAG]{_R} ← /apriltag/detections  •  '
+                    f'Tag {tag_id} détecté  ({n_seen}/2 vus)')
         if len(self.detected_tag_ids) >= 2:
-            self.get_logger().info(f'Found {len(self.detected_tag_ids)} tags! Calculating goal...')
             self.calculate_and_navigate_to_middle()
 
-    # ==================== TF TAG → ODOM ====================
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CALCUL DU BUT (COUCHE DÉLIBÉRATIVE — GLOBALE)
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def get_tag_position_in_odom(self, tag_id):
-        """Récupère la position d'un tag dans la frame odom."""
-        tag_frame = f'tag36h11:{tag_id}'
-        target_frame = 'odom'
-        
+        """
+        Interroge TF2 pour obtenir la position du tag dans le repère 'odom'.
+
+        apriltag_ros publie automatiquement un frame TF nommé 'tag36h11:<id>'
+        pour chaque tag détecté. Ce frame représente la pose du tag dans le
+        repère de la caméra.
+
+        lookup_transform('odom', 'tag36h11:X', ...) effectue la chaîne de
+        transformations odom → base_link → camera_link → tag36h11:X en sens
+        inverse, ce qui donne la position du tag dans odom.
+
+        timeout=0 : on prend la dernière transformation disponible sans attendre.
+        Si le tag vient d'être détecté, la transformation peut ne pas encore
+        exister → exception catchée → on réessaiera à la prochaine détection.
+        """
         try:
-            transform = self.tf_buffer.lookup_transform(
-                target_frame,
-                tag_frame,
-                Time(),
-                timeout=Duration(seconds=2.0)
-            )
-            
-            x = transform.transform.translation.x
-            y = transform.transform.translation.y
-            z = transform.transform.translation.z
-            
-            self.get_logger().info(f'Tag {tag_id} at x={x:.2f}, y={y:.2f}, z={z:.2f}')
-            return (x, y, z)
-            
+            tf = self.tf_buffer.lookup_transform(
+                'odom', f'tag36h11:{tag_id}', Time(),
+                timeout=Duration(seconds=0.0))
+            t = tf.transform.translation
+            self.get_logger().info(
+                f'{_C}[TF2]{_R}  odom ← tag36h11:{tag_id}  →  '
+                f'x={t.x:+.2f}  y={t.y:+.2f}')
+            return (t.x, t.y, t.z)
         except Exception as e:
-            self.get_logger().warn(f'Could not get position for tag {tag_id}: {e}')
+            self.get_logger().warn(f'TF tag {tag_id} : {e}')
             return None
 
-    # ==================== GOAL AU MILIEU DES TAGS + M-LINE ====================
-
     def calculate_and_navigate_to_middle(self):
-        """Calcule le goal, définit la m-line et démarre la navigation."""
-        tag_ids = list(self.detected_tag_ids)[:2]
-        
-        positions = []
-        for tag_id in tag_ids:
-            pos = self.get_tag_position_in_odom(tag_id)
-            if pos is not None:
-                positions.append(pos)
-        
+        """
+        Calcule le point milieu entre les deux tags et démarre la boucle 10 Hz.
+
+        sorted() garantit le même résultat peu importe l'ordre de détection.
+        Si le lookup TF échoue, navigation_started reste False → la prochaine
+        détection (même tags, callback rappelé) réessaiera automatiquement.
+
+        create_timer(0.1, callback) crée un timer ROS2 qui appelle navigate()
+        toutes les 0.1 s (10 Hz). C'est la boucle de contrôle principale.
+        """
+        tag_ids   = sorted(self.detected_tag_ids)[:2]
+        positions = [p for p in (self.get_tag_position_in_odom(t) for t in tag_ids) if p]
         if len(positions) < 2:
-            self.get_logger().error('Could not get 2 tag positions.')
+            self.get_logger().error('Positions TF indisponibles — nouvel essai à la prochaine détection.')
             return
-        
-        # Point milieu = goal
+
         self.goal_x = (positions[0][0] + positions[1][0]) / 2.0
         self.goal_y = (positions[0][1] + positions[1][1]) / 2.0
-        
-        # Position de départ pour Bug2 (m-line)
-        self.start_x = self.current_x
-        self.start_y = self.current_y
-        
-        self.m_dx = self.goal_x - self.start_x
-        self.m_dy = self.goal_y - self.start_y
-        self.m_norm = math.sqrt(self.m_dx**2 + self.m_dy**2)
-        self.m_line_defined = self.m_norm > 1e-3
-        
+
         self.get_logger().info(
-            f'GOAL: x={self.goal_x:.2f}, y={self.goal_y:.2f}, '
-            f'm-line_defined={self.m_line_defined}'
-        )
-        
-        # Démarrer navigation (5 Hz)
+            f'{_Y}{_B}[GOAL]{_R} Midpoint calculé : '
+            f'({self.goal_x:.2f}, {self.goal_y:.2f})  dans odom')
+        self.get_logger().info(
+            f'{_Y}{_B}[NAV]{_R}  Timer 10 Hz actif  →  PUB /cmd_vel')
+
         self.navigation_started = True
-        self.mode = "GO_TO_GOAL"
-        self.contouring_obstacle = False
-        self.hit_distance_to_goal = None
+        self.in_corridor = False
         if self.nav_timer is not None:
-            self.nav_timer.cancel()
-        self.nav_timer = self.create_timer(0.2, self.navigate)  # 5 Hz
+            self.nav_timer.cancel()  # annule un éventuel timer précédent
+        self.nav_timer = self.create_timer(0.1, self.navigate)  # 10 Hz
 
-    # ==================== OUTILS M-LINE (BUG2) ====================
-
-    def m_line_metrics(self):
-        """
-        Retourne (distance à la m-line, side) pour la position actuelle.
-        side = signe du produit vectoriel m x (p - start).
-        """
-        if not self.m_line_defined:
-            return None, None
-
-        vx = self.current_x - self.start_x
-        vy = self.current_y - self.start_y
-
-        # distance à la droite start→goal
-        cross = self.m_dx * vy - self.m_dy * vx
-        d_line = abs(cross) / self.m_norm
-
-        # côté de la droite (signe)
-        side = 0.0
-        if cross > 0:
-            side = 1.0
-        elif cross < 0:
-            side = -1.0
-
-        return d_line, side
-
-    # ==================== NAVIGATION PRINCIPALE ====================
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BOUCLE DE CONTRÔLE (10 Hz — appelée par le timer ROS2)
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def navigate(self):
-        """Boucle de navigation principale avec GoToGoal + Bug2 (wall-following)."""
-        if self.goal_x is None or self.goal_y is None:
-            return
-        
-        # Distance et angle vers le goal
-        dx = self.goal_x - self.current_x
-        dy = self.goal_y - self.current_y
-        distance_to_goal = math.sqrt(dx**2 + dy**2)
-        angle_to_goal = math.atan2(dy, dx)
-        angle_diff = self.normalize_angle(angle_to_goal - self.current_yaw)
+        """
+        Sélectionne et exécute la couche de contrôle appropriée.
 
-        d_line, side = self.m_line_metrics()
-        
-        cmd = Twist()
-        
-        # ========== VÉRIFICATION ARRIVÉE ==========
-        if distance_to_goal < self.distance_tolerance:
-            self.get_logger().info('GOAL REACHED!')
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            self.cmd_vel_pub.publish(cmd)
-            if self.nav_timer is not None:
+        L'ordre des if/elif implémente les priorités : la première condition
+        qui s'applique court-circuite toutes les suivantes (early return).
+
+        cmd = Twist() crée une commande nulle (robot arrêté) ; chaque couche
+        la remplit avant de l'envoyer sur /cmd_vel.
+        """
+        if self.goal_x is None:
+            return
+
+        dx   = self.goal_x - self.current_x
+        dy   = self.goal_y - self.current_y
+        dist = math.sqrt(dx ** 2 + dy ** 2)
+
+        cmd = Twist()  # linear.x=0, angular.z=0 par défaut
+
+        # ── Arrivée ───────────────────────────────────────────────────────────
+        if dist < self.distance_tolerance:
+            gx, gy = self.goal_x, self.goal_y
+            self.cmd_vel_pub.publish(cmd)                      # stopper le robot
+            self.goal_reached_pub.publish(Bool(data=True))     # déclencher table_detector
+            if self.nav_timer:
                 self.nav_timer.cancel()
+            self.goal_x = None  # empêche tout re-déclenchement si le timer fire une dernière fois
+            self.get_logger().info(
+                f'{_G}{_B}╔══════════════════════════════════════════════════╗{_R}')
+            self.get_logger().info(
+                f'{_G}{_B}║  DESTINATION ATTEINTE  ({gx:.2f}, {gy:.2f})  dans odom  ║{_R}')
+            self.get_logger().info(
+                f'{_G}{_B}║  PUB → /goal_reached  :  True                    ║{_R}')
+            self.get_logger().info(
+                f'{_G}{_B}╚══════════════════════════════════════════════════╝{_R}')
             return
-        
-        # ========== DÉCISION DE MODE (BUG2) ==========
-        # 1) Rencontre d'un obstacle sur le chemin du goal -> début contournement
-        if self.min_front_distance < self.obstacle_threshold:
-            if self.mode != "WALL_FOLLOWING":
+
+        # Erreur de cap : différence entre la direction du but et l'orientation courante.
+        # normalize_angle ramène dans [-π, π] pour choisir le sens de rotation le plus court.
+        heading_err = self.normalize_angle(math.atan2(dy, dx) - self.current_yaw)
+
+        # ── Prio 0 : Couloir ─────────────────────────────────────────────────
+        # Un mur de chaque côté à moins de corridor_threshold → on est dans un couloir.
+        # Les fenêtres ±20° (étroites) évitent les faux positifs dans une salle ouverte
+        # avec des tables.
+        left_ok  = 0.05 < self.min_left_distance  < self.corridor_threshold
+        right_ok = 0.05 < self.min_right_distance < self.corridor_threshold
+        if left_ok and right_ok:
+            if not self.in_corridor:
+                self.in_corridor = True
                 self.get_logger().info(
-                    f'[BUG2] Obstacle ahead ({self.min_front_distance:.2f}m). '
-                    'Start contouring -> WALL_FOLLOWING.'
-                )
-                self.mode = "WALL_FOLLOWING"
-                self.contouring_obstacle = True
-                self.hit_distance_to_goal = distance_to_goal
+                    f'{_M}[CORRIDOR]{_R} Entrée  '
+                    f'G={self.min_left_distance:.2f} m  D={self.min_right_distance:.2f} m  '
+                    f'→  centrage LiDAR  (Prio 0)')
+            self._corridor_control(cmd)
+            self.cmd_vel_pub.publish(cmd)
+            return
 
-        # 2) Condition de sortie du contournement (Bug2)
-        elif self.mode == "WALL_FOLLOWING" and self.contouring_obstacle and self.m_line_defined:
-            on_m_line = d_line is not None and d_line < self.m_line_epsilon
-            closer_than_hit = (
-                self.hit_distance_to_goal is not None
-                and distance_to_goal < self.hit_distance_to_goal - self.m_line_margin
-            )
-            front_clear = self.min_front_distance > 0.9
-            good_angle = abs(angle_diff) < math.radians(45)
+        if self.in_corridor:
+            self.in_corridor = False
+            self.get_logger().info(
+                f'{_M}[CORRIDOR]{_R} Sortie  →  reprise navigation vers le but')
 
-            if on_m_line and closer_than_hit and front_clear and good_angle:
-                self.get_logger().info(
-                    f'[BUG2] Finished contouring: d_line={d_line:.2f}, '
-                    f'dist={distance_to_goal:.2f} < hit={self.hit_distance_to_goal:.2f}. '
-                    'Switching back to GO_TO_GOAL.'
-                )
-                self.mode = "GO_TO_GOAL"
-                self.contouring_obstacle = False
-                self.hit_distance_to_goal = None
+        front = self.min_front_distance
 
-        # 3) Si pas en contournement et mur plus là -> retour GoToGoal
-        elif self.mode == "WALL_FOLLOWING" and not self.contouring_obstacle:
-            if self.min_front_distance > 0.8:
-                self.get_logger().info('[BUG2] Path clear and not contouring -> GO_TO_GOAL.')
-                self.mode = "GO_TO_GOAL"
-        
-        # ========== EXÉCUTION SELON LE MODE ==========
-        if self.mode == "WALL_FOLLOWING":
-            self.wall_following_control(cmd)
-        else:
-            self.go_to_goal_control(cmd, distance_to_goal, angle_diff)
-        
+        # ── Prio 1 : Urgence ─────────────────────────────────────────────────
+        if front < self.d_emergency:
+            cmd.linear.x  = -0.05  # reculer doucement
+            cmd.angular.z = (1.0 if self.min_left_distance > self.min_right_distance
+                             else -1.0)  # pivoter vers le côté le plus dégagé
+            self.cmd_vel_pub.publish(cmd)
+            return
+
+        # ── Prio 2 : Réactif ─────────────────────────────────────────────────
+        if front < self.d_obstacle:
+            self._reactive_control(cmd, front, heading_err)
+            self.cmd_vel_pub.publish(cmd)
+            return
+
+        # ── Prio 3 : Délibératif ─────────────────────────────────────────────
+        self._deliberative_control(cmd, dist, heading_err)
         self.cmd_vel_pub.publish(cmd)
 
-    # ==================== CONTRÔLE WALL FOLLOWING ====================
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COUCHES DE CONTRÔLE
+    # ═══════════════════════════════════════════════════════════════════════════
 
-    def wall_following_control(self, cmd: Twist):
+    def _reactive_control(self, cmd: Twist, front: float, heading_err: float):
         """
-        Suivi de mur à gauche :
-          - si bloqué dans un coin -> manoeuvre d'échappement (recul + rotation)
-          - sinon : soit on cherche le mur, soit on le suit à distance constante.
+        Prio 2 — Couche réactive : obstacle dans la zone [d_emergency, d_obstacle].
+
+        Stratégie : tourner vers le côté le plus dégagé (stimuli LiDAR → action
+        directe, sans planification).
+        Un biais délibératif (0.4 × heading_err) est conservé pour que le robot
+        préfère contourner du côté qui rapproche du but quand c'est possible.
+        La vitesse linéaire décroît linéairement avec la distance à l'obstacle.
         """
-
-        # 1) Coin très proche (mur devant + mur gauche)
-        very_close_front = self.min_front_distance < 0.30
-        very_close_left = self.min_left_distance < 0.32
-
-        if very_close_front and very_close_left:
-            cmd.linear.x = -0.12     # petit recul
-            cmd.angular_z = -1.8     # rotation forte à droite
-            self.get_logger().info(
-                f'[WALL] HARD CORNER ESCAPE front={self.min_front_distance:.2f}, '
-                f'left={self.min_left_distance:.2f} -> BACK & TURN RIGHT'
-            )
-            return
-
-        # 2) Obstacle devant mais pas coin serré -> pivot sur place à droite
-        if self.min_front_distance < 0.40:
-            cmd.linear.x = 0.0
-            cmd.angular_z = -1.4
-            self.get_logger().info(
-                f'[WALL] Obstacle front ({self.min_front_distance:.2f}m) -> TURN RIGHT IN PLACE'
-            )
-            return
-
-        # 3) Pas de mur à gauche -> on le cherche
-        if self.min_left_distance > 0.90 or self.min_left_distance == 999.0:
-            cmd.linear.x = 0.45
-            cmd.angular_z = 1.3
-            self.get_logger().info(
-                f'[WALL] No left wall (d_left={self.min_left_distance:.2f}m) -> searching LEFT'
-            )
-            return
-
-        # 4) Mur détecté à gauche -> suivi à distance cible
-        wall_error = self.min_left_distance - self.wall_follow_distance
-        cmd.linear.x = self.wall_follow_speed
-
-        if wall_error < -0.10:
-            cmd.angular_z = -1.0  # trop proche -> droite
-            self.get_logger().info(
-                f'[WALL] Too close to left wall (err={wall_error:.2f}) -> turn RIGHT'
-            )
-        elif wall_error > 0.10:
-            cmd.angular_z = 1.0   # trop loin -> gauche
-            self.get_logger().info(
-                f'[WALL] Too far from left wall (err={wall_error:.2f}) -> turn LEFT'
-            )
+        if self.min_left_distance > self.min_right_distance:
+            ang_react = self.k_front   # plus ouvert à gauche → tourner gauche (+ en ROS)
         else:
-            cmd.angular_z = 0.0   # distance correcte
-            self.get_logger().info(
-                f'[WALL] Distance OK to left wall (err={wall_error:.2f}) -> straight'
-            )
+            ang_react = -self.k_front  # plus ouvert à droite → tourner droite (- en ROS)
 
-    # ==================== CONTRÔLE GO TO GOAL ====================
+        cmd.angular.z = max(-self.max_angular,
+                            min(self.max_angular, ang_react + 0.4 * heading_err))
+        cmd.linear.x  = 0.2 * (front / self.d_obstacle)  # ralentissement proportionnel
 
-    def go_to_goal_control(self, cmd: Twist, distance_to_goal: float, angle_diff: float):
-        """Contrôle de déplacement direct vers le goal."""
-        self.get_logger().info(
-            f'[GOAL] Dist={distance_to_goal:.2f}m, angle_diff={math.degrees(angle_diff):.1f}°, '
-            f'front={self.min_front_distance:.2f}m'
-        )
+    def _deliberative_control(self, cmd: Twist, dist: float, heading_err: float):
+        """
+        Prio 3 — Couche délibérative + répulsion douce (Motor Schema, Arkin 1989).
 
-        # Si on est mal orienté -> tourner sur place
-        if abs(angle_diff) > self.angle_tolerance:
+        On additionne deux comportements indépendants sur la vitesse angulaire :
+
+          1. Attraction vers le but (délibérative)
+             ang_goal = k_att × heading_error
+             → régulateur P sur l'erreur de cap
+
+          2. Répulsion des obstacles proches (réactive douce)
+             Chaque obstacle dans son rayon d'influence génère une «force»
+             angulaire qui pousse le robot dans la direction opposée.
+             L'intensité décroît linéairement avec la distance.
+
+        La somme donne une navigation fluide qui suit le but tout en déviant
+        doucement autour des obstacles latéraux.
+
+        Important : linear.x est toujours > 0 → pas de rotation sur place.
+        C'est la différence clé avec Bug2 (qui arrêtait le robot pour tourner).
+        """
+        ang_goal = self.k_att * heading_err
+
+        ang_avoid = 0.0
+        fl = self.min_front_left_distance
+        fr = self.min_front_right_distance
+        l  = self.min_left_distance
+        r  = self.min_right_distance
+
+        # (1 - d/d_max) : force maximale quand l'obstacle est très proche,
+        # nulle quand il atteint la limite d'influence
+        if fl < self.d_diag:
+            ang_avoid -= self.k_diag * (1.0 - fl / self.d_diag)  # avant-gauche → pousser à droite
+        if fr < self.d_diag:
+            ang_avoid += self.k_diag * (1.0 - fr / self.d_diag)  # avant-droit  → pousser à gauche
+        if l < self.d_side:
+            ang_avoid -= self.k_side * (1.0 - l / self.d_side)   # gauche       → pousser à droite
+        if r < self.d_side:
+            ang_avoid += self.k_side * (1.0 - r / self.d_side)   # droit        → pousser à gauche
+
+        cmd.angular.z = max(-self.max_angular,
+                            min(self.max_angular, ang_goal + ang_avoid))
+        # min(max_linear, dist) : vitesse pleine en espace ouvert,
+        # réduite automatiquement à l'approche du but
+        cmd.linear.x = min(self.max_linear, dist)
+
+    def _corridor_control(self, cmd: Twist):
+        """
+        Prio 0 — Mode couloir : centrage latéral entre deux murs.
+
+        Erreur latérale = distance_gauche - distance_droite.
+        Si > 0 : plus d'espace à gauche → corriger en tournant légèrement à gauche.
+        Régulateur P sur cette erreur pour maintenir le robot au centre.
+        Si le couloir est bloqué devant, on pivote vers l'ouverture la plus large.
+        """
+        if self.min_front_distance < 0.50:
+            cmd.angular.z = (0.8 if self.min_left_distance > self.min_right_distance
+                             else -0.8)
             cmd.linear.x = 0.0
-            cmd.angular_z = self.angular_speed if angle_diff > 0 else -self.angular_speed
-        else:
-            # Bien orienté -> avancer vite vers le goal
-            cmd.linear.x = min(self.normal_speed, distance_to_goal)
-            cmd.angular_z = 0.0
+            return
 
-    # ==================== UTILS ====================
+        lateral_error = self.min_left_distance - self.min_right_distance
+        cmd.linear.x  = self.corridor_speed
+        cmd.angular.z = max(-self.max_angular,
+                            min(self.max_angular, self.k_corridor * lateral_error))
 
-    def normalize_angle(self, angle: float) -> float:
-        """Normalise un angle entre -pi et pi."""
-        while angle > math.pi:
-            angle -= 2.0 * math.pi
-        while angle < -math.pi:
-            angle += 2.0 * math.pi
-        return angle
+    # ═══════════════════════════════════════════════════════════════════════════
+    # UTILITAIRE
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def normalize_angle(a: float) -> float:
+        """Ramène un angle en radians dans [-π, π] par opération modulo."""
+        return (a + math.pi) % (2 * math.pi) - math.pi
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    rclpy.init(args=args)   # initialise la communication ROS2 (DDS)
     node = GoToTags()
-    
     try:
-        rclpy.spin(node)
+        rclpy.spin(node)    # boucle d'événements : dispatch les callbacks entrants
     except KeyboardInterrupt:
         pass
-    
-    # Arrêt propre
-    cmd = Twist()
-    node.cmd_vel_pub.publish(cmd)
-    
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        try:
+            node.cmd_vel_pub.publish(Twist())  # s'assurer que le robot s'arrête
+        except Exception:
+            pass
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

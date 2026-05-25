@@ -3,14 +3,21 @@ build/
 install/
 log/
 .colcon/
-confi
 
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
-# Divers
+# Claude AI (mémoire locale, non pertinente pour le projet)
+.claude/
+
+# Documents personnels / cours (non distribués avec le code)
+Cours/
+*.pdf
+
+# Éditeurs
 *.swp
 *.swo
-LICENSE
-
+.vscode/
+.idea/

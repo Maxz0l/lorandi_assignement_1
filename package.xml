@@ -21,6 +21,9 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>apriltag_msgs</depend>
 
+  <!-- Nœud AprilTag (fournit l'exécutable apriltag_node) -->
+  <exec_depend>apriltag_ros</exec_depend>
+
   <!-- Pour ros2 launch -->
   <exec_depend>ros2launch</exec_depend>
 
