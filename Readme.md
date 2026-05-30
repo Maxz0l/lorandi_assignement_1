@@ -26,43 +26,20 @@ lorandi_assignement_1/
 └── Readme.md
 ```
 
-### ROS2 Package — `package.xml` and `CMakeLists.txt`
-
-A **ROS2 package** is the basic unit of software organization. Any directory containing a `package.xml` is a package. The manifest declares:
-- The package name, version, and maintainer
-- All dependencies — packages that must be available to build and run this code
-
-`rosdep` reads `package.xml` to install missing dependencies automatically:
-```bash
-rosdep install --from-paths src --ignore-src -r -y
-```
-
-`CMakeLists.txt` tells `colcon` (the ROS2 build tool) how to build the package and where to install executables so that `ros2 run` and `ros2 launch` can find them.
-
 ### `scripts/` — ROS2 Nodes
 
-A **node** is a single process in the ROS2 computational graph. Nodes are the basic execution units: each node runs independently, has a unique name, and communicates exclusively through the middleware (topics, services, actions).
+This package contains four nodes, each in its own Python file:
 
-Key properties:
-- **Decoupled**: nodes do not call each other directly — they publish and subscribe to named channels called **topics**
-- **Typed**: every topic carries messages of a specific type (`LaserScan`, `Twist`, `PoseArray`…)
-- **Asynchronous**: a subscriber's callback is called automatically when a message arrives, driven by the executor (`rclpy.spin`)
-
-This package has four nodes, each in its own Python file. Each file contains exactly one class inheriting from `Node`, and a `main()` function that calls `rclpy.spin()`.
-
-### `launch/` — Launch Files
-
-Without a launch file, starting this project would require running five separate `ros2 run` commands in five terminals, in the right order, with the right parameters. A **launch file** replaces all of that with a single command.
-
-In ROS2, launch files are plain Python scripts that return a `LaunchDescription` — a list of **actions** to execute:
-
-| Action | What it does |
+| Node | Role |
 |---|---|
-| `Node(...)` | Starts a ROS2 node with specified parameters, remappings, and log level |
-| `IncludeLaunchDescription(...)` | Includes and executes another launch file (here: the Gazebo simulation) |
-| `SetEnvironmentVariable(...)` / `os.environ` | Sets an environment variable before any process starts |
+| `tag_detector.py` | Logs each new AprilTag detection |
+| `go_to_tags.py` | Hybrid navigation to the midpoint between two tags |
+| `table_detector.py` | LiDAR-based cylinder (table) detection |
+| `table_publisher.py` | Aggregates raw detections into stable final positions |
 
-The launch file `lorandi_assignment_1.launch.py` starts six processes in one command:
+### `launch/` — Launch File
+
+`lorandi_assignment_1.launch.py` starts the whole pipeline (six processes) in a single command:
 
 1. **Gazebo simulation** — `ir_launch/assignment_1.launch.py` (TurtleBot3 + environment)
 2. **`apriltag_node`** — detects AprilTags from the camera feed; log level set to `error` to suppress synchronization warnings
@@ -71,15 +48,15 @@ The launch file `lorandi_assignment_1.launch.py` starts six processes in one com
 5. **`table_detector`** — detects cylindrical tables with LiDAR once the robot arrives
 6. **`table_publisher`** — aggregates raw detections into stable final positions
 
-**Topic remapping** is another key feature of the launch system. Instead of hardcoding topic names in the node code, you can remap them at launch time:
-```python
-remappings=[('image_rect', '/rgb_camera/image')]
-```
-This tells `apriltag_node` to subscribe to `/rgb_camera/image` even though it internally uses `image_rect`. The node code never changes.
+The launch file remaps `apriltag_node`'s input from `image_rect` to `/rgb_camera/image`, so the camera topic is wired without changing any node code.
 
 ### `config/` — YAML Parameters
 
-ROS2 nodes can expose parameters (tag family, detection thresholds…) that are set at startup without recompiling. `apriltag_params.yaml` configures the AprilTag detector: tag family (`tag36h11`), tag size (0.050 m), and detection thresholds. The `Node` action in the launch file loads this file via `parameters=[path_to_yaml]`.
+`apriltag_params.yaml` configures the AprilTag detector: family `tag36h11`, tag size 0.050 m, and detection thresholds. It is loaded by the `apriltag_node` action in the launch file via `parameters=[...]`.
+
+### Build files
+
+`package.xml` declares the package name, maintainer, and dependencies; `rosdep` reads it to install them automatically. `CMakeLists.txt` tells `colcon` how to build the package and where to install the executables so `ros2 launch` can find them.
 
 ---
 
