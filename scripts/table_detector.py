@@ -29,10 +29,12 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseArray, Pose
 from std_msgs.msg import Bool
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import (Buffer, TransformListener,
+                     LookupException, ConnectivityException, ExtrapolationException)
 import tf2_geometry_msgs
 
 _G = '\033[92m'
@@ -55,9 +57,11 @@ class TableDetector(Node):
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # Subscriber au LiDAR : scan_callback appelé à chaque rotation complète (~10 Hz)
+        # Subscriber au LiDAR : scan_callback appelé à chaque rotation complète (~10 Hz).
+        # QoS capteur (BEST_EFFORT) : les drivers LiDAR publient en BEST_EFFORT ; un
+        # subscriber RELIABLE (défaut) ne recevrait alors AUCUN message (QoS incompatible).
         self.scan_sub = self.create_subscription(
-            LaserScan, '/scan', self.scan_callback, 10)
+            LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
 
         # Subscriber au signal d'arrivée : active la détection des tables.
         # On détecte APRÈS l'arrivée pour éviter les faux positifs pendant le déplacement.
@@ -65,14 +69,16 @@ class TableDetector(Node):
         self.goal_reached_sub = self.create_subscription(
             Bool, '/goal_reached', self.goal_reached_callback, 10)
 
-        print(f'{_B}╔══════════════════════════════════════════════════════════╗{_R}')
-        print(f'{_B}║  TableDetector — Détection de tables cylindriques LiDAR  ║{_R}')
-        print(f'{_B}╠══════════════════════════════════════════════════════════╣{_R}')
-        print(f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                  {_B}║{_R}')
-        print(f'{_B}║{_R}  {_Y}SUB{_R}  /goal_reached          Bool  (signal d\'activation) {_B}║{_R}')
-        print(f'{_B}║{_R}  {_G}PUB{_R}  /detected_tables       PoseArray (dans odom)       {_B}║{_R}')
-        print(f'{_B}║{_R}  {_C}TF2{_R}  base_link → odom  (stabilise les positions)       {_B}║{_R}')
-        print(f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
+        self.get_logger().info(
+            '\n'
+            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
+            f'{_B}║  TableDetector — Détection de tables cylindriques LiDAR  ║{_R}\n'
+            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
+            f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                  {_B}║{_R}\n'
+            f'{_B}║{_R}  {_Y}SUB{_R}  /goal_reached          Bool  (signal d\'activation) {_B}║{_R}\n'
+            f'{_B}║{_R}  {_G}PUB{_R}  /detected_tables       PoseArray (dans odom)       {_B}║{_R}\n'
+            f'{_B}║{_R}  {_C}TF2{_R}  base_link → odom  (stabilise les positions)       {_B}║{_R}\n'
+            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
         self.get_logger().info('En attente de /goal_reached…')
 
     def goal_reached_callback(self, msg: Bool):
@@ -268,7 +274,7 @@ class TableDetector(Node):
 
             return tables_odom
 
-        except Exception as e:
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().warn(f'Transformation vers odom impossible : {e}')
             return None
 
@@ -276,9 +282,13 @@ class TableDetector(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = TableDetector()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

@@ -69,13 +69,15 @@ class TablePublisher(Node):
         # que lorsque le résultat change (pas toutes les secondes)
         self._last_log_count = -1
 
-        print(f'{_B}╔══════════════════════════════════════════════════════════╗{_R}')
-        print(f'{_B}║  TablePublisher — Agrégation et publication des tables   ║{_R}')
-        print(f'{_B}╠══════════════════════════════════════════════════════════╣{_R}')
-        print(f'{_B}║{_R}  {_Y}SUB{_R}  /detected_tables       PoseArray  (~10 Hz)         {_B}║{_R}')
-        print(f'{_B}║{_R}  {_G}PUB{_R}  /final_tables          PoseArray  (1 Hz)            {_B}║{_R}')
-        print(f'{_B}║{_R}  Timer 1 Hz — clustering greedy single-linkage (r=0.5 m)   {_B}║{_R}')
-        print(f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
+        self.get_logger().info(
+            '\n'
+            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
+            f'{_B}║  TablePublisher — Agrégation et publication des tables   ║{_R}\n'
+            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
+            f'{_B}║{_R}  {_Y}SUB{_R}  /detected_tables       PoseArray  (~10 Hz)         {_B}║{_R}\n'
+            f'{_B}║{_R}  {_G}PUB{_R}  /final_tables          PoseArray  (1 Hz)            {_B}║{_R}\n'
+            f'{_B}║{_R}  Timer 1 Hz — clustering greedy single-linkage (r=0.5 m)   {_B}║{_R}\n'
+            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
 
     def tables_callback(self, msg: PoseArray):
         """
@@ -183,8 +185,11 @@ class TablePublisher(Node):
             clusters.append((len(members), center))
 
         # Trier par nombre de membres décroissant : les clusters les plus stables
-        # (vus le plus souvent) arrivent en premier
-        clusters.sort(key=lambda x: x[0], reverse=True)
+        # (vus le plus souvent) arrivent en premier.
+        # Clé de tri scalaire (nb membres, puis x) : en cas d'égalité du nombre de
+        # membres, on départage sur la position x. Sans cette clé secondaire, Python
+        # comparerait les objets Pose (non ordonnables) → TypeError.
+        clusters.sort(key=lambda c: (-c[0], c[1].position.x))
         return [center for _, center in clusters]
 
 
@@ -195,8 +200,9 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
