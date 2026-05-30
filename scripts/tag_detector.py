@@ -76,13 +76,15 @@ class TagDetector(Node):
         # est visible — le terminal deviendrait illisible.
         self.detected_ids = set()
 
-        print(f'{_B}╔══════════════════════════════════════════════════════════╗{_R}')
-        print(f'{_B}║  TagDetector — Détection et journalisation des AprilTags ║{_R}')
-        print(f'{_B}╠══════════════════════════════════════════════════════════╣{_R}')
-        print(f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray     {_B}║{_R}')
-        print(f'{_B}║{_R}       QoS : BEST_EFFORT / VOLATILE / KEEP_LAST(10)        {_B}║{_R}')
-        print(f'{_B}║{_R}  {_G}PUB{_R}  /tags_poses_camera     PoseArray                  {_B}║{_R}')
-        print(f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
+        self.get_logger().info(
+            '\n'
+            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
+            f'{_B}║  TagDetector — Détection et journalisation des AprilTags ║{_R}\n'
+            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
+            f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray     {_B}║{_R}\n'
+            f'{_B}║{_R}       QoS : BEST_EFFORT / VOLATILE / KEEP_LAST(10)        {_B}║{_R}\n'
+            f'{_B}║{_R}  {_G}PUB{_R}  /tags_poses_camera     PoseArray                  {_B}║{_R}\n'
+            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
 
     def detections_callback(self, msg: AprilTagDetectionArray):
         """

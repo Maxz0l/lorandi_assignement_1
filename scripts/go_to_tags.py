@@ -38,13 +38,15 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
+from rclpy.qos import qos_profile_sensor_data
 
 from apriltag_msgs.msg import AprilTagDetectionArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import (Buffer, TransformListener,
+                     LookupException, ConnectivityException, ExtrapolationException)
 
 _G = '\033[92m'   # vert
 _Y = '\033[93m'   # jaune
@@ -67,14 +69,16 @@ class GoToTags(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # ── Subscribers ───────────────────────────────────────────────────────
-        # Signature : create_subscription(type_msg, nom_topic, callback, qos_depth)
-        # qos_depth = taille de la file d'attente si les messages arrivent trop vite
+        # QoS capteur (BEST_EFFORT) pour les flux temps-réel : apriltag_ros et la
+        # plupart des drivers LiDAR/odométrie publient en BEST_EFFORT. Un subscriber
+        # RELIABLE (défaut) serait incompatible et ne recevrait AUCUN message.
         self.subscription = self.create_subscription(
-            AprilTagDetectionArray, '/apriltag/detections', self.detection_callback, 10)
+            AprilTagDetectionArray, '/apriltag/detections', self.detection_callback,
+            qos_profile_sensor_data)
         self.odom_sub = self.create_subscription(
-            Odometry, '/odom', self.odom_callback, 10)
+            Odometry, '/odom', self.odom_callback, qos_profile_sensor_data)
         self.scan_sub = self.create_subscription(
-            LaserScan, '/scan', self.scan_callback, 10)
+            LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
 
         # ── Publishers ────────────────────────────────────────────────────────
         # Twist     : message standard pour les commandes de vitesse (linear + angular)
@@ -246,7 +250,7 @@ class GoToTags(Node):
                 f'{_C}[TF2]{_R}  odom ← tag36h11:{tag_id}  →  '
                 f'x={t.x:+.2f}  y={t.y:+.2f}')
             return (t.x, t.y, t.z)
-        except Exception as e:
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().warn(f'TF tag {tag_id} : {e}')
             return None
 
