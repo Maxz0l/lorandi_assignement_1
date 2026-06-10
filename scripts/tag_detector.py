@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-tag_detector.py — AprilTag detection and logging
+tag_detector.py - AprilTag detection and logging
 =================================================
 
 ROS2 concepts used
 ------------------
-  QoSProfile  : Quality of Service — reliability settings of a topic.
+  QoSProfile  : Quality of Service - reliability settings of a topic.
                 The apriltag_ros node publishes with BEST_EFFORT (no delivery
-                guarantee), so we must subscribe with the same profile,
+                guarantee), so I must subscribe with the same profile,
                 otherwise ROS2 refuses the connection between publisher and
                 subscriber.
 
                 Settings used:
-                  BEST_EFFORT  : we accept message losses (fine for a
+                  BEST_EFFORT  : I accept message losses (fine for a
                                  real-time sensor stream)
                   VOLATILE     : no message persistence (no "latch")
                   KEEP_LAST(10): keep the last 10 messages in the queue
@@ -67,19 +67,19 @@ class TagDetector(Node):
             self.detections_callback,
             qos_profile)
 
-        # Publisher: empty PoseArray for now (extensible if we later want to
+        # Publisher: empty PoseArray for now (extensible if I later want to
         # compute the poses in the camera frame)
         self.tags_pose_pub = self.create_publisher(PoseArray, '/tags_poses_camera', 10)
 
         # Set of IDs already logged, so each tag is printed only once.
         # Without it, the log would print on every camera frame (~30 Hz) as
-        # long as a tag is visible — the terminal would become unreadable.
+        # long as a tag is visible - the terminal would become unreadable.
         self.detected_ids = set()
 
         self.get_logger().info(
             '\n'
             f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
-            f'{_B}║  TagDetector — AprilTag detection and logging            ║{_R}\n'
+            f'{_B}║  TagDetector - AprilTag detection and logging            ║{_R}\n'
             f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
             f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray      {_B}║{_R}\n'
             f'{_B}║{_R}       QoS : BEST_EFFORT / VOLATILE / KEEP_LAST(10)       {_B}║{_R}\n'
@@ -95,7 +95,7 @@ class TagDetector(Node):
           family          : code family (here 'tag36h11')
           decision_margin : detection confidence (higher = more reliable)
 
-        Note: id is a plain int32, not an array — do not write det.id[0].
+        Note: id is a plain int32, not an array - do not write det.id[0].
         """
         if not msg.detections:
             return

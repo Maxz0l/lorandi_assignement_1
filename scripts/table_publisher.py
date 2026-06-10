@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-table_publisher.py — Aggregation and publishing of the final table positions
+table_publisher.py - Aggregation and publishing of the final table positions
 ============================================================================
 
 ROS2 concepts used
 ------------------
-  Timer       : create_timer(period, callback) — calls publish_final_tables()
+  Timer       : create_timer(period, callback) - calls publish_final_tables()
                 every second, independently of incoming messages.
   PoseArray   : message holding a list of Pose in a given frame.
                 Each Pose = position (x, y, z) + orientation (quaternion).
@@ -25,7 +25,7 @@ Clustering algorithm (greedy single-linkage)
 --------------------------------------------
   For each detection not yet assigned:
     1. It becomes the centre of a new cluster.
-    2. We add to it every remaining detection within a 0.5 m radius.
+    2. I add to it every remaining detection within a 0.5 m radius.
     3. The final cluster position = mean of the member positions.
   Clusters are sorted by member count (the most observed = the most
   reliable) and the first 3 are published.
@@ -72,18 +72,18 @@ class TablePublisher(Node):
         self.get_logger().info(
             '\n'
             f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
-            f'{_B}║  TablePublisher — Table aggregation and publishing       ║{_R}\n'
+            f'{_B}║  TablePublisher - Table aggregation and publishing       ║{_R}\n'
             f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
             f'{_B}║{_R}  {_Y}SUB{_R}  /detected_tables       PoseArray  (~10 Hz)         {_B}║{_R}\n'
             f'{_B}║{_R}  {_G}PUB{_R}  /final_tables          PoseArray  (1 Hz)           {_B}║{_R}\n'
-            f'{_B}║{_R}  Timer 1 Hz — greedy single-linkage clustering (r=0.5 m) {_B}║{_R}\n'
+            f'{_B}║{_R}  Timer 1 Hz - greedy single-linkage clustering (r=0.5 m) {_B}║{_R}\n'
             f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
 
     def tables_callback(self, msg: PoseArray):
         """
         Receives a PoseArray from table_detector and appends it to the history.
 
-        We accumulate successive snapshots instead of aggregating on the fly to
+        I accumulate successive snapshots instead of aggregating on the fly to
         keep flexibility: if the robot moves slightly after arrival, the new
         detections refine the positions.
         """
@@ -151,7 +151,7 @@ class TablePublisher(Node):
         Returns a list of Pose (cluster centres), sorted by decreasing member
         count (the most observed first).
 
-        Complexity: O(n²) — acceptable for n ≤ 50 × a few tables.
+        Complexity: O(n²) - acceptable for n ≤ 50 × a few tables.
         """
         if not tables:
             return []
@@ -188,7 +188,7 @@ class TablePublisher(Node):
         # Sort by decreasing member count: the most stable clusters
         # (seen most often) come first.
         # Scalar sort key (member count, then x): on a tie in member count,
-        # we break it on the x position. Without this secondary key, Python
+        # I break it on the x position. Without this secondary key, Python
         # would compare the Pose objects (not orderable) → TypeError.
         clusters.sort(key=lambda c: (-c[0], c[1].position.x))
         return [center for _, center in clusters]

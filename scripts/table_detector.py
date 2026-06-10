@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-table_detector.py — Cylindrical table detection from LiDAR
+table_detector.py - Cylindrical table detection from LiDAR
 ==========================================================
 
 ROS2 concepts used
@@ -10,7 +10,7 @@ ROS2 concepts used
   PoseArray   : list of poses (position + orientation) in a given frame.
   TF2         : tree of transforms between frames.
                 Here: base_link (robot frame) → odom (fixed world frame).
-  QoS         : Quality of Service — reliability settings of the topics
+  QoS         : Quality of Service - reliability settings of the topics
                 (not used directly here, default QoS = RELIABLE).
 
 This node only activates after receiving /goal_reached (Bool),
@@ -64,7 +64,7 @@ class TableDetector(Node):
             LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
 
         # Arrival-signal subscriber: enables table detection.
-        # We detect AFTER arrival to avoid false positives while moving.
+        # I detect AFTER arrival to avoid false positives while moving.
         self.goal_reached = False
         self.goal_reached_sub = self.create_subscription(
             Bool, '/goal_reached', self.goal_reached_callback, 10)
@@ -72,7 +72,7 @@ class TableDetector(Node):
         self.get_logger().info(
             '\n'
             f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
-            f'{_B}║  TableDetector — Cylindrical table detection (LiDAR)     ║{_R}\n'
+            f'{_B}║  TableDetector - Cylindrical table detection (LiDAR)     ║{_R}\n'
             f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
             f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                   {_B}║{_R}\n'
             f'{_B}║{_R}  {_Y}SUB{_R}  /goal_reached          Bool  (activation signal)   {_B}║{_R}\n'
@@ -99,12 +99,12 @@ class TableDetector(Node):
 
         Segmentation algorithm (1D range segmentation)
         ----------------------------------------------
-        We walk through the ranges[] array ray by ray.
+        I walk through the ranges[] array ray by ray.
         Two consecutive rays belong to the same object if their distance
         difference is below cluster_gap (0.20 m).
         A jump > cluster_gap marks a boundary between two distinct objects.
 
-        Note: we use msg.header.stamp (the real scan timestamp) rather than
+        Note: I use msg.header.stamp (the real scan timestamp) rather than
         now() so the TF2 transform is consistent in time.
         """
         if not self.goal_reached:
