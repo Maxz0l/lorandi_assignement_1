@@ -11,6 +11,7 @@ __pycache__/
 
 # Claude AI (mémoire locale, non pertinente pour le projet)
 .claude/
+CLAUDE.md
 
 # Documents personnels / cours (non distribués avec le code)
 Cours/

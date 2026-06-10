@@ -6,13 +6,13 @@ from ament_index_python.packages import get_package_share_directory
 
 import os
 
-# Défini au niveau Python (avant tout spawn de process) pour que Gazebo hérite de la valeur.
-# IGN_VERBOSITY : 0=silence, 1=erreurs, 2=warnings, 3=info, 4=debug
+# Set at the Python level (before any process spawn) so Gazebo inherits the value.
+# IGN_VERBOSITY: 0=silent, 1=errors, 2=warnings, 3=info, 4=debug
 os.environ['IGN_VERBOSITY'] = '1'
 
 
 def generate_launch_description():
-    # 1) Lancement de la simulation officielle (ir_launch)
+    # 1) Launch the official simulation (ir_launch)
     ir_launch_dir = get_package_share_directory('ir_launch')
     assignment_launch_path = os.path.join(
         ir_launch_dir,
@@ -25,7 +25,7 @@ def generate_launch_description():
         launch_arguments={'use_rviz': 'false'}.items()
     )
 
-    # 2) Node AprilTag avec caméra EXTERNE
+    # 2) AprilTag node with the EXTERNAL camera
     apriltag_node = Node(
         package='apriltag_ros',
         executable='apriltag_node',
@@ -33,7 +33,7 @@ def generate_launch_description():
         namespace='apriltag',
         output='screen',
         remappings=[
-            ('image_rect', '/rgb_camera/image'),  # <-- Caméra externe !
+            ('image_rect', '/rgb_camera/image'),  # <-- External camera!
             ('camera_info', '/rgb_camera/camera_info')
         ],
         parameters=[os.path.join(
@@ -44,7 +44,7 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', 'error']
     )
 
-    # 3) Ton node
+    # 3) Tag detector node
     tag_detector_node = Node(
         package='lorandi_assignament_1',
         executable='tag_detector.py',
@@ -58,7 +58,7 @@ def generate_launch_description():
         executable='go_to_tags.py',
         name='go_to_tags',
         output='screen'
-    ) 
+    )
     # 5) Table detector node
     table_detector_node = Node(
         package='lorandi_assignament_1',

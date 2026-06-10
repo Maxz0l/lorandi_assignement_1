@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """
-tag_detector.py — Détection et journalisation des AprilTags
-============================================================
+tag_detector.py — AprilTag detection and logging
+=================================================
 
-Concepts ROS2 utilisés
-----------------------
-  QoSProfile  : Quality of Service — paramètres de fiabilité d'un topic.
-                Le nœud apriltag_ros publie avec BEST_EFFORT (pas de garantie
-                de livraison) ; on doit s'abonner avec le même profil sinon
-                ROS2 refuse la connexion entre publisher et subscriber.
+ROS2 concepts used
+------------------
+  QoSProfile  : Quality of Service — reliability settings of a topic.
+                The apriltag_ros node publishes with BEST_EFFORT (no delivery
+                guarantee), so we must subscribe with the same profile,
+                otherwise ROS2 refuses the connection between publisher and
+                subscriber.
 
-                Paramètres utilisés :
-                  BEST_EFFORT  : on accepte les pertes de messages (OK pour
-                                 un flux capteur temps-réel)
-                  VOLATILE     : pas de persistance des messages (pas de «latch»)
-                  KEEP_LAST(10): on garde les 10 derniers messages en file
+                Settings used:
+                  BEST_EFFORT  : we accept message losses (fine for a
+                                 real-time sensor stream)
+                  VOLATILE     : no message persistence (no "latch")
+                  KEEP_LAST(10): keep the last 10 messages in the queue
 
-  PoseArray   : message contenant des poses dans un repère donné.
-                Ce nœud le publie vide (pas de pose calculée) car la position
-                réelle des tags est obtenue via TF2 dans go_to_tags.
+  PoseArray   : message holding poses expressed in a given frame.
+                This node publishes it empty (no pose computed) because the
+                real tag positions are obtained through TF2 in go_to_tags.
 
-Rôle dans le pipeline
----------------------
-Ce nœud est un point d'observation / débogage :
-  - S'abonne à /apriltag/detections (publié par apriltag_ros)
-  - Logue chaque nouveau tag à sa première détection (une seule fois)
-  - Publie un PoseArray vide sur /tags_poses_camera (placeholder extensible)
+Role in the pipeline
+--------------------
+This node is an observation / debugging point:
+  - Subscribes to /apriltag/detections (published by apriltag_ros)
+  - Logs each new tag on its first detection (only once)
+  - Publishes an empty PoseArray on /tags_poses_camera (extensible placeholder)
 
-Il ne participe pas à la navigation : go_to_tags récupère directement
-les positions des tags via TF2 (plus précis qu'un calcul local).
+It does not take part in navigation: go_to_tags reads the tag positions
+directly through TF2 (more accurate than a local computation).
 """
 
 import rclpy
@@ -40,7 +41,6 @@ from geometry_msgs.msg import PoseArray
 
 _G = '\033[92m'
 _Y = '\033[93m'
-_C = '\033[96m'
 _B = '\033[1m'
 _R = '\033[0m'
 
@@ -50,50 +50,52 @@ class TagDetector(Node):
     def __init__(self):
         super().__init__('tag_detector')
 
-        # QoS adapté au publisher apriltag_ros (BEST_EFFORT).
-        # Si on utilisait le QoS par défaut (RELIABLE), ROS2 refuserait
-        # la connexion car les profils seraient incompatibles.
+        # QoS matching the apriltag_ros publisher (BEST_EFFORT).
+        # With the default QoS (RELIABLE), ROS2 would refuse the connection
+        # because the profiles would be incompatible.
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10)
 
-        # Subscriber : AprilTagDetectionArray contient la liste de tous les tags
-        # visibles dans l'image courante, publiée à chaque frame caméra.
+        # Subscriber: AprilTagDetectionArray holds the list of all tags
+        # visible in the current image, published on every camera frame.
         self.subscription = self.create_subscription(
             AprilTagDetectionArray,
             '/apriltag/detections',
             self.detections_callback,
             qos_profile)
 
-        # Publisher : PoseArray vide pour l'instant (extensible si on veut
-        # calculer les poses dans le repère caméra)
+        # Publisher: empty PoseArray for now (extensible if we later want to
+        # compute the poses in the camera frame)
         self.tags_pose_pub = self.create_publisher(PoseArray, '/tags_poses_camera', 10)
 
-        # Ensemble des IDs déjà loggués pour n'afficher chaque tag qu'une seule fois.
-        # Sans ça, le log s'afficherait à chaque frame caméra (~30 Hz) dès qu'un tag
-        # est visible — le terminal deviendrait illisible.
+        # Set of IDs already logged, so each tag is printed only once.
+        # Without it, the log would print on every camera frame (~30 Hz) as
+        # long as a tag is visible — the terminal would become unreadable.
         self.detected_ids = set()
 
-        print(f'{_B}╔══════════════════════════════════════════════════════════╗{_R}')
-        print(f'{_B}║  TagDetector — Détection et journalisation des AprilTags ║{_R}')
-        print(f'{_B}╠══════════════════════════════════════════════════════════╣{_R}')
-        print(f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray     {_B}║{_R}')
-        print(f'{_B}║{_R}       QoS : BEST_EFFORT / VOLATILE / KEEP_LAST(10)        {_B}║{_R}')
-        print(f'{_B}║{_R}  {_G}PUB{_R}  /tags_poses_camera     PoseArray                  {_B}║{_R}')
-        print(f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
+        self.get_logger().info(
+            '\n'
+            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
+            f'{_B}║  TagDetector — AprilTag detection and logging            ║{_R}\n'
+            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
+            f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray      {_B}║{_R}\n'
+            f'{_B}║{_R}       QoS : BEST_EFFORT / VOLATILE / KEEP_LAST(10)       {_B}║{_R}\n'
+            f'{_B}║{_R}  {_G}PUB{_R}  /tags_poses_camera     PoseArray                   {_B}║{_R}\n'
+            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
 
     def detections_callback(self, msg: AprilTagDetectionArray):
         """
-        Reçoit les détections AprilTag et logue chaque nouveau tag.
+        Receives AprilTag detections and logs each new tag.
 
-        AprilTagDetection contient :
-          id              : identifiant entier du tag (int32)
-          family          : famille de code (ici 'tag36h11')
-          decision_margin : confiance de la détection (plus grand = plus sûr)
+        AprilTagDetection holds:
+          id              : integer tag identifier (int32)
+          family          : code family (here 'tag36h11')
+          decision_margin : detection confidence (higher = more reliable)
 
-        Note : id est un int32 simple, pas un tableau — ne pas faire det.id[0].
+        Note: id is a plain int32, not an array — do not write det.id[0].
         """
         if not msg.detections:
             return
@@ -102,17 +104,20 @@ class TagDetector(Node):
         pose_array.header.frame_id = 'camera_link'
         pose_array.header.stamp    = self.get_clock().now().to_msg()
 
+        has_new = False
         for det in msg.detections:
             tag_id = det.id
             if tag_id not in self.detected_ids:
+                has_new = True
                 self.detected_ids.add(tag_id)
                 self.get_logger().info(
                     f'{_Y}[TAG]{_R} ← /apriltag/detections  •  '
-                    f'id={tag_id}  marge={det.decision_margin:.1f}  '
+                    f'id={tag_id}  margin={det.decision_margin:.1f}  '
                     f'(QoS: BEST_EFFORT)')
 
-        # Publication du PoseArray (vide pour l'instant)
-        self.tags_pose_pub.publish(pose_array)
+        # Publish only when new tags have been detected
+        if has_new:
+            self.tags_pose_pub.publish(pose_array)
 
 
 def main(args=None):
