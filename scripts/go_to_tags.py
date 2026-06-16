@@ -24,7 +24,7 @@ Hybrid deliberative / reactive architecture (lectures 18-BIS, 19)
   Reactive     : SENSE → ACT          (fast, local sensors)
                  → obstacle avoidance from the LiDAR scan
 
-The two layers are combined by priority (subsumption, Brooks 1986):
+The two layers are combined by priority (subsumption):
 
   Prio 0 - Corridor    : lateral centring between two walls
   Prio 1 - Emergency   : back off if obstacle < 0.30 m
@@ -133,19 +133,6 @@ class GoToTags(Node):
         # ── Arrival tolerance ─────────────────────────────────────────────────
         self.distance_tolerance = 0.25  # [m]
 
-        self.get_logger().info(
-            '\n'
-            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
-            f'{_B}║  GoToTags - Hybrid deliberative / reactive navigation    ║{_R}\n'
-            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray      {_B}║{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /odom                  Odometry                    {_B}║{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                   {_B}║{_R}\n'
-            f'{_B}║{_R}  {_G}PUB{_R}  /cmd_vel               Twist                       {_B}║{_R}\n'
-            f'{_B}║{_R}  {_G}PUB{_R}  /goal_reached          Bool                        {_B}║{_R}\n'
-            f'{_B}║{_R}  {_C}TF2{_R}  odom ← tag36h11:<id>  (dynamic lookup)             {_B}║{_R}\n'
-            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
-
     # ═══════════════════════════════════════════════════════════════════════════
     # SENSOR CALLBACKS
     # The callbacks are called asynchronously by the ROS2 executor, on every
@@ -207,7 +194,7 @@ class GoToTags(Node):
         Receives AprilTag detections and starts navigation once 2 tags are seen.
 
         AprilTagDetection.id is an int32 (not an array).
-        I block this callback after navigation starts so the goal is not
+        This callback is blockedafter navigation starts so the goal is not
         recomputed on the way.
         """
         if self.navigation_started:
