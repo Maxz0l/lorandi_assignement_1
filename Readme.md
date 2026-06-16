@@ -4,7 +4,7 @@
 **Package:** `lorandi_assignament_1`  
 **Student:** Lorandi Enzo  
 **Repository:** https://github.com/Maxz0l/lorandi_assignement_1  
-**Video:** *(link to be added)*
+**Video:** https://youtu.be/XyFvxgqdXcs
 
 ---
 
@@ -184,7 +184,9 @@ In corridor mode:
 - Forward speed is reduced to 0.30 m/s for safe traversal.
 - On exit, normal goal-directed navigation resumes.
 
-The narrow ±20° windows prevent false activations in an open room where distant walls or tables might fall within a wider cone.
+The narrow ±20° windows are meant to avoid false activations in an open room where distant walls or tables might fall within a wider cone.
+
+**Known limitation:** the robot reliably reaches its goal between the two tags, but in the current map the corridor condition stays active for most of the navigation — the robot thinks it is in the corridor even when it is not. This does not prevent it from reaching the destination, but the corridor behaviour is not cleanly limited to the real passage. Tuning the detection thresholds (the ±20° windows and the 0.60 m limit) would be the next step.
 
 ---
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-go_to_tags.py — Navigation to the midpoint between two AprilTags
+go_to_tags.py - Navigation to the midpoint between two AprilTags
 ===============================================================
 
 ROS2 concepts used
@@ -24,12 +24,12 @@ Hybrid deliberative / reactive architecture (lectures 18-BIS, 19)
   Reactive     : SENSE → ACT          (fast, local sensors)
                  → obstacle avoidance from the LiDAR scan
 
-The two layers are combined by priority (subsumption, Brooks 1986):
+The two layers are combined by priority (subsumption):
 
-  Prio 0 – Corridor    : lateral centring between two walls
-  Prio 1 – Emergency   : back off if obstacle < 0.30 m
-  Prio 2 – Reactive    : LiDAR steers if obstacle < 0.55 m
-  Prio 3 – Deliberative: heading to goal + soft repulsion (Motor Schema)
+  Prio 0 - Corridor    : lateral centring between two walls
+  Prio 1 - Emergency   : back off if obstacle < 0.30 m
+  Prio 2 - Reactive    : LiDAR steers if obstacle < 0.55 m
+  Prio 3 - Deliberative: heading to goal + soft repulsion (Motor Schema)
 """
 
 import math
@@ -99,7 +99,7 @@ class GoToTags(Node):
         self.current_yaw = 0.0           # robot orientation [rad]
 
         # ── LiDAR distances (5 angular windows) ───────────────────────────────
-        # Each value = minimum distance measured in a ±15–20° cone.
+        # Each value = minimum distance measured in a ±15-20° cone.
         # Initialized to 999 (= no obstacle detected).
         self.min_front_distance       = 999.0  # 0°
         self.min_front_left_distance  = 999.0  # +30°
@@ -109,12 +109,12 @@ class GoToTags(Node):
 
         self.in_corridor = False  # remembers corridor state to avoid repeated logs
 
-        # ── Parameters – deliberative layer ──────────────────────────────────
+        # ── Parameters - deliberative layer ──────────────────────────────────
         self.k_att       = 1.0  # P gain: heading error [rad] → angular.z [rad/s]
         self.max_linear  = 0.4  # max linear speed [m/s]
         self.max_angular = 1.2  # max angular speed [rad/s]
 
-        # ── Parameters – reactive layer ───────────────────────────────────────
+        # ── Parameters - reactive layer ───────────────────────────────────────
         self.d_emergency = 0.30  # emergency threshold [m]: immediate back off
         self.d_obstacle  = 0.55  # reactive threshold [m]: reactive layer takes over
         self.k_front     = 0.8   # rotation gain in reactive mode
@@ -125,26 +125,13 @@ class GoToTags(Node):
         self.k_diag = 0.6   # diagonal repulsion gain
         self.k_side = 0.5   # lateral repulsion gain
 
-        # ── Parameters – corridor mode (extra points) ────────────────────────
+        # ── Parameters - corridor mode (extra points) ────────────────────────
         self.corridor_threshold = 0.60  # [m] threshold to detect a side wall
         self.corridor_speed     = 0.30  # [m/s] speed inside the corridor
         self.k_corridor         = 1.0   # lateral centring gain
 
         # ── Arrival tolerance ─────────────────────────────────────────────────
         self.distance_tolerance = 0.25  # [m]
-
-        self.get_logger().info(
-            '\n'
-            f'{_B}╔══════════════════════════════════════════════════════════╗{_R}\n'
-            f'{_B}║  GoToTags — Hybrid deliberative / reactive navigation    ║{_R}\n'
-            f'{_B}╠══════════════════════════════════════════════════════════╣{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /apriltag/detections   AprilTagDetectionArray      {_B}║{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /odom                  Odometry                    {_B}║{_R}\n'
-            f'{_B}║{_R}  {_Y}SUB{_R}  /scan                  LaserScan                   {_B}║{_R}\n'
-            f'{_B}║{_R}  {_G}PUB{_R}  /cmd_vel               Twist                       {_B}║{_R}\n'
-            f'{_B}║{_R}  {_G}PUB{_R}  /goal_reached          Bool                        {_B}║{_R}\n'
-            f'{_B}║{_R}  {_C}TF2{_R}  odom ← tag36h11:<id>  (dynamic lookup)             {_B}║{_R}\n'
-            f'{_B}╚══════════════════════════════════════════════════════════╝{_R}')
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SENSOR CALLBACKS
@@ -161,7 +148,7 @@ class GoToTags(Node):
           angle_min      : angle of the first ray [rad]
           angle_increment: angular step between two rays [rad]
 
-        We compute angular "windows" to be robust to noise:
+        I compute angular "windows" to be robust to noise:
         window_min(θ, Δθ) = minimum of the rays in the cone [θ-Δθ, θ+Δθ].
         """
         ranges = msg.ranges
@@ -192,7 +179,7 @@ class GoToTags(Node):
         Updates the robot pose from the /odom topic (wheel odometry).
 
         Odometry.pose.pose.orientation is a quaternion (x, y, z, w).
-        We extract the rotation angle around Z (yaw) with the standard
+        I extract the rotation angle around Z (yaw) with the standard
         formula: yaw = atan2(2(wz + xy), 1 - 2(y² + z²)).
         """
         self.current_x = msg.pose.pose.position.x
@@ -207,7 +194,7 @@ class GoToTags(Node):
         Receives AprilTag detections and starts navigation once 2 tags are seen.
 
         AprilTagDetection.id is an int32 (not an array).
-        We block this callback after navigation starts so the goal is not
+        This callback is blockedafter navigation starts so the goal is not
         recomputed on the way.
         """
         if self.navigation_started:
@@ -224,7 +211,7 @@ class GoToTags(Node):
             self.calculate_and_navigate_to_middle()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # GOAL COMPUTATION (DELIBERATIVE LAYER — GLOBAL)
+    # GOAL COMPUTATION (DELIBERATIVE LAYER - GLOBAL)
     # ═══════════════════════════════════════════════════════════════════════════
 
     def get_tag_position_in_odom(self, tag_id):
@@ -241,7 +228,7 @@ class GoToTags(Node):
 
         timeout=0: take the latest available transform without waiting.
         If the tag was just detected, the transform may not exist yet
-        → exception caught → we retry on the next detection.
+        → exception caught → I retry on the next detection.
         """
         try:
             tf = self.tf_buffer.lookup_transform(
@@ -270,7 +257,7 @@ class GoToTags(Node):
         tag_ids   = sorted(self.detected_tag_ids)[:2]
         positions = [p for p in (self.get_tag_position_in_odom(t) for t in tag_ids) if p]
         if len(positions) < 2:
-            self.get_logger().error('TF positions unavailable — retrying on the next detection.')
+            self.get_logger().error('TF positions unavailable - retrying on the next detection.')
             return
 
         self.goal_x = (positions[0][0] + positions[1][0]) / 2.0
@@ -290,7 +277,7 @@ class GoToTags(Node):
         self.nav_timer = self.create_timer(0.1, self.navigate)  # 10 Hz
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # CONTROL LOOP (10 Hz — called by the ROS2 timer)
+    # CONTROL LOOP (10 Hz - called by the ROS2 timer)
     # ═══════════════════════════════════════════════════════════════════════════
 
     def navigate(self):
@@ -338,7 +325,7 @@ class GoToTags(Node):
         heading_err = self.normalize_angle(math.atan2(dy, dx) - self.current_yaw)
 
         # ── Prio 0: Corridor ─────────────────────────────────────────────────
-        # A wall on each side closer than corridor_threshold → we are in a corridor.
+        # A wall on each side closer than corridor_threshold → the robot is in a corridor.
         # The narrow ±20° windows avoid false positives in an open room with tables.
         left_ok  = 0.05 < self.min_left_distance  < self.corridor_threshold
         right_ok = 0.05 < self.min_right_distance < self.corridor_threshold
@@ -384,7 +371,7 @@ class GoToTags(Node):
 
     def _reactive_control(self, cmd: Twist, front: float, heading_err: float):
         """
-        Prio 2 — Reactive layer: obstacle in the zone [d_emergency, d_obstacle].
+        Prio 2 - Reactive layer: obstacle in the zone [d_emergency, d_obstacle].
 
         Strategy: turn toward the most open side (LiDAR stimulus → direct
         action, no planning).
@@ -403,9 +390,9 @@ class GoToTags(Node):
 
     def _deliberative_control(self, cmd: Twist, dist: float, heading_err: float):
         """
-        Prio 3 — Deliberative layer + soft repulsion (Motor Schema, Arkin 1989).
+        Prio 3 - Deliberative layer + soft repulsion (Motor Schema, Arkin 1989).
 
-        We add two independent behaviours on the angular velocity:
+        I add two independent behaviours on the angular velocity:
 
           1. Attraction to the goal (deliberative)
              ang_goal = k_att × heading_error
@@ -449,12 +436,12 @@ class GoToTags(Node):
 
     def _corridor_control(self, cmd: Twist):
         """
-        Prio 0 — Corridor mode: lateral centring between two walls.
+        Prio 0 - Corridor mode: lateral centring between two walls.
 
         Lateral error = left_distance - right_distance.
         If > 0: more space on the left → correct by turning slightly left.
         P controller on this error to keep the robot centred.
-        If the corridor is blocked ahead, we pivot toward the widest opening.
+        If the corridor is blocked ahead, the robot pivots toward the widest opening.
         """
         if self.min_front_distance < 0.50:
             cmd.angular.z = (0.8 if self.min_left_distance > self.min_right_distance

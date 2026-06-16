@@ -1,7 +1,7 @@
 """
-lorandi_nodes.launch.py - Launches ONLY our nodes, in a clean terminal.
+lorandi_nodes.launch.py - Launches ONLY my nodes, in a clean terminal.
 
-Goal: a readable display showing ONLY our nodes (each with its own colour, its
+Goal: a readable display showing ONLY my nodes (each with its own colour, its
 SUB/PUB/TF banners and its [TAG]/[GOAL]/[NAV]/[CORRIDOR]/[TOPIC] tags), without
 the Gazebo / Nav2 / RViz noise. The professor's simulation is launched SEPARATELY,
 in another terminal:
@@ -9,10 +9,10 @@ in another terminal:
     Terminal 1 (the professor's simulation: Gazebo + Nav2 - minimize it):
         ros2 launch ir_launch assignment_1.launch.py
 
-    Terminal 2 (our nodes, clean and coloured):
+    Terminal 2 (my nodes, clean and coloured):
         ros2 launch lorandi_assignament_1 lorandi_nodes.launch.py
 
-Our nodes wait on their own for the simulation topics (/apriltag/detections, /odom,
+My nodes wait on their own for the simulation topics (/apriltag/detections, /odom,
 /scan, TF), so the launch order is tolerant.
 
 For an all-in-one launch (sim + nodes in the same terminal), use
